@@ -2,10 +2,11 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import HTTPException, Query, status
+from fastapi import Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
 from xcore.sdk import TrustedBase, AutoDispatchMixin, RoutedPlugin, RouterRegistry, action
+from xcore.kernel.api.rbac import get_current_user, require_role, AuthPayload, require_permission
 from xcore.kernel.events import Event
 
 from .client import RedisPubSubManager, StreamLimitExceeded, InvalidChannel, validate_channels, RedisConfiguration
@@ -30,8 +31,13 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
     async def on_load(self) -> None:
         self.event = self.ctx.events
         self.redis_server: RedisPubSubManager | None = None
+        health_cheker = self.ctx.health
 
-
+        @health_cheker.register("xpulse.redis")
+        async def redis_health_check():
+            if not self.redis_server:
+                return False, "Redis non configuré."
+            return await self.redis_server.health_check(), "Redis répond." if await self.redis_server.health_check() else "Redis ne répond pas."
         try:
             self.redis_server = RedisPubSubManager(RedisConfiguration.from_dict(self.ctx.env))
             await self.redis_server.connect()
@@ -140,7 +146,7 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
     @router.get("/stream/{user_id}", tags=["xpulse"])
     async def get_stream(
         self,
-        user_id: str,
+        current_user: AuthPayload = Depends(get_current_user),
         channels: list[str] = Query(
             default=["notification"],
             description=(
@@ -164,7 +170,7 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
         """
         redis = self._require_redis()
 
-        if not user_id or not user_id.strip():
+        if not user_id or not current_user.sub.strip():
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="user_id invalide.")
 
         # Support des channels séparés par virgule : ?channels=notification,alerts
@@ -189,7 +195,7 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
             },
         )
 
-    @router.post("/publish", tags=["xpulse"])
+    @router.post("/publish", tags=["xpulse"],dependencies=[Depends(require_role("xpulse:broadcast"))])
     async def publish(
         self,
         user_id: str,
@@ -226,7 +232,7 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
             )
         return {"status": "ok", "channels": parsed_channels}
 
-    @router.post("/broadcast", tags=["xpulse"])
+    @router.post("/broadcast", tags=["xpulse"], dependencies=[Depends(require_permission("broadcast_notification"))])
     async def broadcast(
         self,
         text: str,
