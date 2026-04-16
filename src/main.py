@@ -37,7 +37,9 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
         async def redis_health_check():
             if not self.redis_server:
                 return False, "Redis non configuré."
-            return await self.redis_server.health_check(), "Redis répond." if await self.redis_server.health_check() else "Redis ne répond pas."
+            
+            redis = await self.redis_server.health_check()
+            return  redis, "Redis répond." if redis else "Redis ne répond pas."
         try:
             self.redis_server = RedisPubSubManager(RedisConfiguration.from_dict(self.ctx.env))
             await self.redis_server.connect()
@@ -143,7 +145,7 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
 
     # ── Routes HTTP ───────────────────────────────────────────────────────
 
-    @router.get("/stream/{user_id}", tags=["xpulse"])
+    @router.get("/stream/", tags=["xpulse"])
     async def get_stream(
         self,
         current_user: AuthPayload = Depends(get_current_user),
@@ -170,7 +172,7 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
         """
         redis = self._require_redis()
 
-        if not user_id or not current_user.sub.strip():
+        if not current_user.sub.strip() or not current_user.sub.strip():
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="user_id invalide.")
 
         # Support des channels séparés par virgule : ?channels=notification,alerts
