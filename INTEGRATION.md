@@ -1,5 +1,8 @@
 # Intégration XCore - XPulse
 
+![XCore Support](https://img.shields.io/badge/XCore_Support-2.1.1-6f42c1?style=flat-square&logo=github)
+![Security Mode](https://img.shields.io/badge/Mode-Trusted-success?style=flat-square)
+
 Cette documentation détaille comment le plugin **XPulse** interagit avec le noyau et les autres plugins de l'écosystème **XCore**.
 
 ## 🧩 Type de Plugin
@@ -24,9 +27,9 @@ Le plugin expose une action XCore directe utilisable par les autres plugins via 
 
 ### `xpulse.stream`
 Permet à un autre plugin d'injecter manuellement un événement dans le flux Redis.
-- **Usage SDK** :
+- **Usage on other plugin** :
   ```python
-  await ctx.actions.call("xpulse.stream", {
+    await self.call_plugin("xpulse.stream", {
       "channels": ["system_notification"],
       "event": { "user_id": "123", "text": "Alerte système" }
   })
@@ -36,7 +39,7 @@ Permet à un autre plugin d'injecter manuellement un événement dans le flux Re
 En tant que plugin `trusted`, XPulse possède un fichier `plugin.sig`. 
 Toute modification du code source dans `src/` invalidera la signature. Pour re-signer le plugin après modification :
 ```bash
-xcore plugin sign ./XPulse
+xcore plugin sign ./<your_plugin_directory>/xpulse --key  <your plugin_key>
 ```
 
 ## 🔗 Dépendances

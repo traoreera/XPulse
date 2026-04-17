@@ -1,5 +1,10 @@
 # XPulse
 
+![XCore Version](https://img.shields.io/badge/XCore-2.1.1-6f42c1?style=for-the-badge&logo=github)
+![Version](https://img.shields.io/badge/XPulse-v0.1.0-blue?style=for-the-badge)
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis-Compatible-D82C20?style=for-the-badge&logo=redis&logoColor=white)
+
 XPulse est un système de notification en temps réel haute performance conçu comme une extension pour le framework **XCore**. Il permet de diffuser des messages aux utilisateurs via **Server-Sent Events (SSE)** en s'appuyant sur **Redis Pub/Sub** pour la distribution des messages à grande échelle.
 
 ## 🚀 Fonctionnalités
@@ -25,10 +30,10 @@ Le plugin se configure via le fichier `plugin.yaml` ou les variables d'environne
 ## 📖 Utilisation API (REST/SSE)
 
 ### 1. Ouvrir un flux de notifications (SSE)
-**GET** `/stream/{user_id}?channels=chan1,chan2`
+**GET** `/stream/?channels=chan1,chan2`
 
 ```javascript
-const src = new EventSource('/stream/user_123?channels=notification,alerts');
+const src = new EventSource('/stream/?channels=notification,alerts');
 
 src.addEventListener('notification', (e) => {
     const data = JSON.parse(e.data);

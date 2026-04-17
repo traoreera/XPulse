@@ -74,7 +74,6 @@ class RedisPubSubManager:
         self._config = config
         self._active_streams = 0
 
-        print(config)
         global MAX_CHANNELS_PER_STREAM
 
         MAX_CHANNELS_PER_STREAM = self._config.MAX_CHANNELS_PER_STREAM

@@ -11,7 +11,13 @@ requires:
   - name: auth
     version: ">=0.1.0, <0.3.0"
 
-permissions: []
+permissions: 
+  - resource: "stream"
+    actions: ["read", "write", "execute"]
+    effect: allow
+  - resource: "xpulse.stream"
+    actions: ["read", "write", "execute"]
+    effect: allow
 
 
 resources:

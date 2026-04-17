@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
-from xcore.sdk import TrustedBase, AutoDispatchMixin, RoutedPlugin, RouterRegistry, action
+from xcore.sdk import TrustedBase, AutoDispatchMixin, RoutedPlugin, RouterRegistry, action, error
 from xcore.kernel.api.rbac import get_current_user, require_role, AuthPayload, require_permission
 from xcore.kernel.events import Event
 
@@ -26,6 +26,55 @@ SYSTEM_CHANNELS = {"system_notification", "broadcast"}
 
 class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
 
+    def _xflow_integration_contract(self) -> dict:
+        return {
+            "plugin": "XPulse",
+            "display_name": "XPulse",
+            "description": "Realtime notifications and SSE channels for XCore.",
+            "xflow_supported": True,
+            "ipc_actions": [
+                {
+                    "name": "stream",
+                    "qualified_name": "XPulse.stream",
+                    "legacy_names": ["XPulse.xpulse.stream", "xpulse.stream"],
+                    "description": "Publie un événement sur un ou plusieurs channels.",
+                    "input_schema": {
+                        "channels": "string[]|optional",
+                        "channel": "string|optional",
+                        "event": "object<any>"
+                    },
+                    "output_schema": {
+                        "status": "string(ok|ignored)",
+                        "channels": "string[]"
+                    },
+                    "sample_payload": {
+                        "channels": ["notification"],
+                        "event": {
+                            "user_id": "123",
+                            "text": "Hello"
+                        }
+                    }
+                }
+            ],
+            "events": {
+                "listens": [
+                    "ext.notification.publish",
+                    "ext.notification.broadcast",
+                    "ext.notification.send"
+                ],
+                "emits": [
+                    "auth.get.user.ids"
+                ]
+            },
+            "http_routes": [
+                {"path": "/stream/", "methods": ["GET"]},
+                {"path": "/publish", "methods": ["POST"]},
+                {"path": "/broadcast", "methods": ["POST"]},
+                {"path": "/health", "methods": ["GET"]},
+                {"path": "/xflow/integration", "methods": ["GET"]}
+            ]
+        }
+
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
     async def on_load(self) -> None:
@@ -37,9 +86,7 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
         async def redis_health_check():
             if not self.redis_server:
                 return False, "Redis non configuré."
-            
-            redis = await self.redis_server.health_check()
-            return  redis, "Redis répond." if redis else "Redis ne répond pas."
+            return await self.redis_server.health_check(), "Redis répond." if await self.redis_server.health_check() else "Redis ne répond pas."
         try:
             self.redis_server = RedisPubSubManager(RedisConfiguration.from_dict(self.ctx.env))
             await self.redis_server.connect()
@@ -143,6 +190,24 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
                     {"user_id": uid, "text": text},
                 )
 
+
+        @self.event.on("ext.notification.send")
+        async def send_notification(event:Event):
+
+            if not self.redis_server:
+                return error(msg="service redis non initialise")
+
+            await self.redis_server.publish(
+                channel=event.data.get('channel', 'notification'),
+                event={
+                    "user_id": event.data.get('user_id', ''),
+                    "event":event.data.get('event', {})
+                }
+            )
+
+
+
+
     # ── Routes HTTP ───────────────────────────────────────────────────────
 
     @router.get("/stream/", tags=["xpulse"])
@@ -172,7 +237,7 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
         """
         redis = self._require_redis()
 
-        if not current_user.sub.strip() or not current_user.sub.strip():
+        if not current_user['sub'] or not current_user["sub"].strip():
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="user_id invalide.")
 
         # Support des channels séparés par virgule : ?channels=notification,alerts
@@ -183,7 +248,7 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
         parsed_channels = self._parse_channels(flat)
 
         try:
-            generator = redis.stream(channels=parsed_channels, user_id=user_id.strip())
+            generator = redis.stream(channels=parsed_channels, user_id=current_user["sub"].strip())
         except StreamLimitExceeded as exc:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
 
@@ -197,7 +262,7 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
             },
         )
 
-    @router.post("/publish", tags=["xpulse"],dependencies=[Depends(require_role("xpulse:broadcast"))])
+    @router.post("/publish", tags=["xpulse"],dependencies=[Depends(require_permission("xpulse:publish"))])
     async def publish(
         self,
         user_id: str,
@@ -234,7 +299,7 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
             )
         return {"status": "ok", "channels": parsed_channels}
 
-    @router.post("/broadcast", tags=["xpulse"], dependencies=[Depends(require_permission("broadcast_notification"))])
+    @router.post("/broadcast", tags=["xpulse"], dependencies=[Depends(require_permission("xpulse:broadcast"))])
     async def broadcast(
         self,
         text: str,
@@ -283,7 +348,7 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
             "errors": total_errors,
         }
 
-    @router.get("/health", tags=["xpulse"])
+    @router.get("/health", tags=["xpulse"], dependencies=[Depends(require_permission("xpulse:health"))])
     async def health(self):
         """Vérifie que Redis est accessible et retourne les métriques courantes."""
         if not self.redis_server:
@@ -302,7 +367,15 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
             "active_streams": self.redis_server.active_streams,
         }
 
+    @router.get("/xflow/integration", tags=["xpulse"])
+    async def xflow_integration(self):
+        return self._xflow_integration_contract()
+
     # ── Action interne ────────────────────────────────────────────────────
+
+    @action("stream")
+    async def publish_message_alias(self, event: dict):
+        return await self.publish_message(event)
 
     @action("xpulse.stream")
     async def publish_message(self, event: dict):
@@ -324,9 +397,10 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
             )
         except InvalidChannel as exc:
             logger.warning("xpulse.stream : channels invalides ignorés : %s", exc)
-            return
+            return {"status": "ignored", "channels": []}
 
         await self.redis_server.publish_many(channels, payload)
+        return {"status": "ok", "channels": channels}
 
     # ── Router ────────────────────────────────────────────────────────────
 
