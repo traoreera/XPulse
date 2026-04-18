@@ -377,13 +377,14 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
     async def publish_message_alias(self, event: dict):
         return await self.publish_message(event)
 
-    @action("xpulse.stream")
+    @action("xpulse.publish")
     async def publish_message(self, event: dict):
         """
         Action interne : publie sur un ou plusieurs channels.
         Payload : { "channels": ["chan1"], "event": {...} }
         ou       { "channel": "chan1",   "event": {...} }
         """
+
         if not self.redis_server:
             logger.warning("xpulse.stream : Redis non disponible, message ignoré.")
             return
@@ -400,7 +401,11 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
             return {"status": "ignored", "channels": []}
 
         await self.redis_server.publish_many(channels, payload)
-        return {"status": "ok", "channels": channels}
+        return {
+            "data":{
+                "status": "ok", "channels": channels
+            }
+        }
 
     # ── Router ────────────────────────────────────────────────────────────
 

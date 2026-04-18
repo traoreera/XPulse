@@ -15,7 +15,7 @@ permissions:
   - resource: "stream"
     actions: ["read", "write", "execute"]
     effect: allow
-  - resource: "xpulse.stream"
+  - resource: "xpulse.publish"
     actions: ["read", "write", "execute"]
     effect: allow
 
@@ -32,7 +32,8 @@ resources:
 runtime:
   health_check:
     enabled: true
-    interval_seconds: 60
+    interval_secget("status") == "error":
+                    span.set_status("error")onds: 60
     timeout_seconds: 3
   
   retry:

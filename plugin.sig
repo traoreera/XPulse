@@ -1,6 +1,6 @@
 {
   "plugin": "XPulse",
   "version": "0.1.0",
-  "digest": "7953be595e478a4b89db281e5be2bbad32d96be54d5b6d8e3846bd1c1e3e095d",
+  "digest": "cda9f9dbb112d1e97c5fc03dc4d68100b8908f10271fd9b50d61f5226ea73f1b",
   "algo": "HMAC-SHA256"
 }
