@@ -1,0 +1,44 @@
+{
+  "plugin": "XPulse",
+  "display_name": "XPulse",
+  "description": "Realtime notifications and SSE channels for XCore.",
+  "xflow_supported": true,
+  "ipc_actions": [
+    {
+      "name": "xpulse.stream",
+      "description": "Publie un événement sur un ou plusieurs channels.",
+      "input_schema": {
+        "channels": {
+          "type": "array",
+          "required": false
+        },
+        "channel": {
+          "type": "string",
+          "required": false
+        },
+        "event": {
+          "type": "dict",
+          "required": true
+        }
+      },
+      "output_schema": {
+        "status": {
+          "type": "string"
+        },
+        "channels": {
+          "type": "array"
+        }
+      }
+    }
+  ],
+  "events": {
+    "listens": [
+      "ext.notification.publish",
+      "ext.notification.broadcast",
+      "ext.notification.send"
+    ],
+    "emits": [
+      "auth.get.user.ids"
+    ]
+  }
+}

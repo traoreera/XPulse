@@ -18,7 +18,9 @@ permissions:
   - resource: "xpulse.publish"
     actions: ["read", "write", "execute"]
     effect: allow
-
+  - resource: "xflow.integration"
+    actions: ['*']
+    effect: allow
 
 resources:
   timeout_seconds: 10

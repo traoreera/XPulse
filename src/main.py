@@ -5,8 +5,8 @@ from typing import Any
 from fastapi import Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
-from xcore.sdk import TrustedBase, AutoDispatchMixin, RoutedPlugin, RouterRegistry, action, error
-from xcore.kernel.api.rbac import get_current_user, require_role, AuthPayload, require_permission
+from xcore.sdk import TrustedBase, AutoDispatchMixin, RoutedPlugin, RouterRegistry, action, error, ok
+from xcore.kernel.api.rbac import get_current_user, AuthPayload, require_permission
 from xcore.kernel.events import Event
 
 from .client import RedisPubSubManager, StreamLimitExceeded, InvalidChannel, validate_channels, RedisConfiguration
@@ -26,54 +26,6 @@ SYSTEM_CHANNELS = {"system_notification", "broadcast"}
 
 class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
 
-    def _xflow_integration_contract(self) -> dict:
-        return {
-            "plugin": "XPulse",
-            "display_name": "XPulse",
-            "description": "Realtime notifications and SSE channels for XCore.",
-            "xflow_supported": True,
-            "ipc_actions": [
-                {
-                    "name": "stream",
-                    "qualified_name": "XPulse.stream",
-                    "legacy_names": ["XPulse.xpulse.stream", "xpulse.stream"],
-                    "description": "Publie un événement sur un ou plusieurs channels.",
-                    "input_schema": {
-                        "channels": "string[]|optional",
-                        "channel": "string|optional",
-                        "event": "object<any>"
-                    },
-                    "output_schema": {
-                        "status": "string(ok|ignored)",
-                        "channels": "string[]"
-                    },
-                    "sample_payload": {
-                        "channels": ["notification"],
-                        "event": {
-                            "user_id": "123",
-                            "text": "Hello"
-                        }
-                    }
-                }
-            ],
-            "events": {
-                "listens": [
-                    "ext.notification.publish",
-                    "ext.notification.broadcast",
-                    "ext.notification.send"
-                ],
-                "emits": [
-                    "auth.get.user.ids"
-                ]
-            },
-            "http_routes": [
-                {"path": "/stream/", "methods": ["GET"]},
-                {"path": "/publish", "methods": ["POST"]},
-                {"path": "/broadcast", "methods": ["POST"]},
-                {"path": "/health", "methods": ["GET"]},
-                {"path": "/xflow/integration", "methods": ["GET"]}
-            ]
-        }
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -367,15 +319,23 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
             "active_streams": self.redis_server.active_streams,
         }
 
-    @router.get("/xflow/integration", tags=["xpulse"])
-    async def xflow_integration(self):
-        return self._xflow_integration_contract()
+
 
     # ── Action interne ────────────────────────────────────────────────────
-
-    @action("stream")
-    async def publish_message_alias(self, event: dict):
-        return await self.publish_message(event)
+    @action("xflow.integration")
+    async def xflow_integration(self, payload:dict):
+        """Lit le contrat d'intégration depuis le fichier JSON."""
+        import json
+        from pathlib import Path
+        path = Path(__file__).parent.parent / "data" / "xflow_integration.json"
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return ok(
+                    data=json.load(f)
+                )
+        except Exception as e:
+            logger.error(f"Erreur lecture xflow_integration.json: {e}")
+            return {"error": "integration_file_missing"}
 
     @action("xpulse.publish")
     async def publish_message(self, event: dict):
