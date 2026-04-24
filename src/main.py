@@ -358,14 +358,18 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
             )
         except InvalidChannel as exc:
             logger.warning("xpulse.stream : channels invalides ignorés : %s", exc)
-            return {"status": "ignored", "channels": []}
+            return error(
+                msg=f"Channels invalides : {exc}",
+                detail=f"Channels fournis : {raw_channels}"
+            )
 
         await self.redis_server.publish_many(channels, payload)
-        return {
-            "data":{
-                "status": "ok", "channels": channels
+        return ok(
+            result={
+                "published_channels": channels,
+                "payload": payload,
             }
-        }
+        )
 
     # ── Router ────────────────────────────────────────────────────────────
 
