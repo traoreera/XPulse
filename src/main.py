@@ -5,8 +5,8 @@ from typing import Any
 from fastapi import Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
-from xcore.sdk import TrustedBase, AutoDispatchMixin, RoutedPlugin, RouterRegistry, action
-from xcore.kernel.api.rbac import get_current_user, require_role, AuthPayload, require_permission
+from xcore.sdk import TrustedBase, AutoDispatchMixin, RoutedPlugin, RouterRegistry, action, error, ok
+from xcore.kernel.api.rbac import get_current_user, AuthPayload, require_permission
 from xcore.kernel.events import Event
 
 from .client import RedisPubSubManager, StreamLimitExceeded, InvalidChannel, validate_channels, RedisConfiguration
@@ -25,6 +25,7 @@ SYSTEM_CHANNELS = {"system_notification", "broadcast"}
 # ─────────────────────────────────────────────
 
 class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
+
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -141,9 +142,27 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
                     {"user_id": uid, "text": text},
                 )
 
+
+        @self.event.on("ext.notification.send")
+        async def send_notification(event:Event):
+
+            if not self.redis_server:
+                return error(msg="service redis non initialise")
+
+            await self.redis_server.publish(
+                channel=event.data.get('channel', 'notification'),
+                event={
+                    "user_id": event.data.get('user_id', ''),
+                    "event":event.data.get('event', {})
+                }
+            )
+
+
+
+
     # ── Routes HTTP ───────────────────────────────────────────────────────
 
-    @router.get("/stream/{user_id}", tags=["xpulse"])
+    @router.get("/stream/", tags=["xpulse"])
     async def get_stream(
         self,
         current_user: AuthPayload = Depends(get_current_user),
@@ -170,7 +189,7 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
         """
         redis = self._require_redis()
 
-        if not user_id or not current_user.sub.strip():
+        if not current_user['sub'] or not current_user["sub"].strip():
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="user_id invalide.")
 
         # Support des channels séparés par virgule : ?channels=notification,alerts
@@ -181,7 +200,7 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
         parsed_channels = self._parse_channels(flat)
 
         try:
-            generator = redis.stream(channels=parsed_channels, user_id=user_id.strip())
+            generator = redis.stream(channels=parsed_channels, user_id=current_user["sub"].strip())
         except StreamLimitExceeded as exc:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
 
@@ -195,7 +214,7 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
             },
         )
 
-    @router.post("/publish", tags=["xpulse"],dependencies=[Depends(require_role("xpulse:broadcast"))])
+    @router.post("/publish", tags=["xpulse"],dependencies=[Depends(require_permission("xpulse:publish"))])
     async def publish(
         self,
         user_id: str,
@@ -232,7 +251,7 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
             )
         return {"status": "ok", "channels": parsed_channels}
 
-    @router.post("/broadcast", tags=["xpulse"], dependencies=[Depends(require_permission("broadcast_notification"))])
+    @router.post("/broadcast", tags=["xpulse"], dependencies=[Depends(require_permission("xpulse:broadcast"))])
     async def broadcast(
         self,
         text: str,
@@ -281,7 +300,7 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
             "errors": total_errors,
         }
 
-    @router.get("/health", tags=["xpulse"])
+    @router.get("/health", tags=["xpulse"], dependencies=[Depends(require_permission("xpulse:health"))])
     async def health(self):
         """Vérifie que Redis est accessible et retourne les métriques courantes."""
         if not self.redis_server:
@@ -300,15 +319,32 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
             "active_streams": self.redis_server.active_streams,
         }
 
-    # ── Action interne ────────────────────────────────────────────────────
 
-    @action("xpulse.stream")
+
+    # ── Action interne ────────────────────────────────────────────────────
+    @action("xflow.integration")
+    async def xflow_integration(self, payload:dict):
+        """Lit le contrat d'intégration depuis le fichier JSON."""
+        import json
+        from pathlib import Path
+        path = Path(__file__).parent.parent / "data" / "xflow_integration.json"
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return ok(
+                    data=json.load(f)
+                )
+        except Exception as e:
+            logger.error(f"Erreur lecture xflow_integration.json: {e}")
+            return {"error": "integration_file_missing"}
+
+    @action("xpulse.publish")
     async def publish_message(self, event: dict):
         """
         Action interne : publie sur un ou plusieurs channels.
         Payload : { "channels": ["chan1"], "event": {...} }
         ou       { "channel": "chan1",   "event": {...} }
         """
+
         if not self.redis_server:
             logger.warning("xpulse.stream : Redis non disponible, message ignoré.")
             return
@@ -322,9 +358,18 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
             )
         except InvalidChannel as exc:
             logger.warning("xpulse.stream : channels invalides ignorés : %s", exc)
-            return
+            return error(
+                msg=f"Channels invalides : {exc}",
+                detail=f"Channels fournis : {raw_channels}"
+            )
 
         await self.redis_server.publish_many(channels, payload)
+        return ok(
+            result={
+                "published_channels": channels,
+                "payload": payload,
+            }
+        )
 
     # ── Router ────────────────────────────────────────────────────────────
 
