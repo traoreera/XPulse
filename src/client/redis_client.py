@@ -16,7 +16,7 @@ logger = logging.getLogger("xpulse.redis")
 
 
 
-MAX_CHANNELS_PER_STREAM = None
+MAX_CHANNELS_PER_STREAM = 20  # valeur par défaut, remplacée à l'init de RedisPubSubManager
 
 # Noms de channels : lettres, chiffres, tirets, underscores, points
 _CHANNEL_RE = re.compile(r"^[a-zA-Z0-9_\-\.]{1,64}$")
