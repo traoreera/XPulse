@@ -36,18 +36,18 @@ router = RouterRegistry()
 
 _PUBLISH_SCHEMA = {
     "channels": (list, ["notification"]),
-    "user_id":  (str, ...),
-    "text":     (str, ...),
+    "user_id": (str, ...),
+    "text": (str, ...),
 }
 
 _BROADCAST_SCHEMA = {
     "channels": (list, ["notification"]),
-    "text":     (str, ...),
+    "text": (str, ...),
 }
 
 _STREAM_SCHEMA = {
     "channels": (list, ["notification"]),
-    "user_id":  (str, ...),
+    "user_id": (str, ...),
 }
 
 _SUBSCRIBERS_SCHEMA = {
@@ -61,7 +61,6 @@ _SUBSCRIBERS_SCHEMA = {
 
 
 class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
-
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
     async def on_load(self) -> None:
@@ -76,6 +75,7 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
             return alive, "Redis répond." if alive else "Redis ne répond pas."
 
         try:
+            self.ctx.env["channel"] = self.ctx.env["channel"].split(",")
             self.redis_server = RedisPubSubManager(
                 RedisConfiguration.from_dict(self.ctx.env)
             )
@@ -109,7 +109,9 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
         try:
             return validate_channels(flat)
         except InvalidChannel as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            )
 
     def _normalize_channels(self, raw: Any) -> list[str]:
         if isinstance(raw, str):
@@ -128,16 +130,22 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
                   ou : { "channel": "...", "user_id": "...", "text": "..." }
             """
             if not self.redis_server:
-                logger.warning("ext.notification.publish ignoré : Redis non disponible.")
+                logger.warning(
+                    "ext.notification.publish ignoré : Redis non disponible."
+                )
                 return [error("redis_unavailable")]
 
             data: dict = dict(event.data)
-            raw_channels = data.pop("channels", None) or [data.pop("channel", "notification")]
+            raw_channels = data.pop("channels", None) or [
+                data.pop("channel", "notification")
+            ]
             user_id = data.get("user_id")
             text = data.get("text", "")
 
             if not user_id or not text:
-                logger.warning("ext.notification.publish : user_id et text sont requis.")
+                logger.warning(
+                    "ext.notification.publish : user_id et text sont requis."
+                )
                 return [error("missing_fields")]
 
             try:
@@ -145,7 +153,9 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
                     raw_channels if isinstance(raw_channels, list) else [raw_channels]
                 )
             except InvalidChannel as exc:
-                logger.warning("ext.notification.publish : channels invalides : %s", exc)
+                logger.warning(
+                    "ext.notification.publish : channels invalides : %s", exc
+                )
                 return [error(str(exc))]
 
             results = await self.redis_server.publish_many(
@@ -154,7 +164,9 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
             ok_channels = [ch for ch, s in results.items() if s]
             fail_channels = [ch for ch, s in results.items() if not s]
             if fail_channels:
-                logger.warning("ext.notification.publish : channels en échec : %s", fail_channels)
+                logger.warning(
+                    "ext.notification.publish : channels en échec : %s", fail_channels
+                )
             return [ok(channels=ok_channels, failed=fail_channels)]
 
         @self.event.on("ext.notification.broadcast")
@@ -186,11 +198,15 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
                 response = await self.event.emit("auth.get.user.ids", {})
                 user_ids = list(response[0]) if response and response[0] else []
             except Exception as exc:
-                logger.error("broadcast : impossible de récupérer les user IDs : %s", exc)
+                logger.error(
+                    "broadcast : impossible de récupérer les user IDs : %s", exc
+                )
                 return [error("cannot_fetch_users")]
 
             for uid in user_ids:
-                await self.redis_server.publish_many(channels, {"user_id": uid, "text": text})
+                await self.redis_server.publish_many(
+                    channels, {"user_id": uid, "text": text}
+                )
 
             return [ok(sent=len(user_ids), channels=channels)]
 
@@ -220,14 +236,18 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
         user_id: str = current_user.get("sub", "")
 
         if not user_id:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token invalide.")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Token invalide."
+            )
 
         parsed_channels = self._parse_channels(channels)
 
         try:
             generator = redis.stream(channels=parsed_channels, user_id=user_id)
         except StreamLimitExceeded as exc:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+            )
 
         return StreamingResponse(
             generator,
@@ -251,7 +271,9 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
         redis = self._require_redis()
         parsed_channels = self._parse_channels(channels)
 
-        results = await redis.publish_many(parsed_channels, {"user_id": user_id, "text": text})
+        results = await redis.publish_many(
+            parsed_channels, {"user_id": user_id, "text": text}
+        )
         failed = [ch for ch, s in results.items() if not s]
         if failed:
             raise HTTPException(
@@ -275,7 +297,9 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
             response = await self.event.emit("auth.get.user.ids", {})
             user_ids = list(response[0]) if response and response[0] else []
         except Exception as exc:
-            logger.error("broadcast HTTP : impossible de récupérer les user IDs : %s", exc)
+            logger.error(
+                "broadcast HTTP : impossible de récupérer les user IDs : %s", exc
+            )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Erreur lors de la récupération des utilisateurs.",
@@ -286,23 +310,38 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
 
         total_errors = 0
         for uid in user_ids:
-            results = await redis.publish_many(parsed_channels, {"user_id": uid, "text": text})
+            results = await redis.publish_many(
+                parsed_channels, {"user_id": uid, "text": text}
+            )
             total_errors += sum(1 for s in results.values() if not s)
 
         logger.info(
             "Broadcast : %d users × %d channels, %d erreurs.",
-            len(user_ids), len(parsed_channels), total_errors,
+            len(user_ids),
+            len(parsed_channels),
+            total_errors,
         )
-        return {"status": "ok", "sent": len(user_ids), "channels": parsed_channels, "errors": total_errors}
+        return {
+            "status": "ok",
+            "sent": len(user_ids),
+            "channels": parsed_channels,
+            "errors": total_errors,
+        }
 
     @router.get("/health", tags=["xpulse"])
     async def health(self):
         """Vérifie que Redis est accessible."""
         if not self.redis_server:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Redis non configuré.")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Redis non configuré.",
+            )
         alive = await self.redis_server.health_check()
         if not alive:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Redis ne répond pas.")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Redis ne répond pas.",
+            )
         return {"status": "ok", "active_streams": self.redis_server.active_streams}
 
     # ── Actions IPC ───────────────────────────────────────────────────────
@@ -351,7 +390,9 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
             return error("cannot_fetch_users")
 
         for uid in user_ids:
-            await self.redis_server.publish_many(channels, {"user_id": uid, "text": payload.text})
+            await self.redis_server.publish_many(
+                channels, {"user_id": uid, "text": payload.text}
+            )
 
         return ok(sent=len(user_ids), channels=channels)
 
@@ -370,7 +411,9 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
         except InvalidChannel as exc:
             return error(str(exc), code="invalid_channel")
 
-        results = await self.redis_server.publish_many(channels, {"user_id": payload.user_id})
+        results = await self.redis_server.publish_many(
+            channels, {"user_id": payload.user_id}
+        )
         failed = [ch for ch, s in results.items() if not s]
         return ok(channels=[ch for ch in channels if ch not in failed], failed=failed)
 
@@ -383,7 +426,9 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
         """
         if not self.redis_server:
             return error("redis_unavailable")
-        return ok(channel=payload.channel, active_streams=self.redis_server.active_streams)
+        return ok(
+            channel=payload.channel, active_streams=self.redis_server.active_streams
+        )
 
     # ── Router ────────────────────────────────────────────────────────────
 

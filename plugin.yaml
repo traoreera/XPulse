@@ -31,12 +31,16 @@ runtime:
     max_attempts: 3
     backoff_seconds: 3.0
 
+envconfiguration:
+  inject: true
+  env_file: .env.example
+
 env:
-  url: redis://localhost:6379/0
-  channel: ["notification", "systeme", "hunters"]
-  MAX_CONCURRENT_STREAMS: 1000
-  MAX_CHANNELS_PER_STREAM: 20 # limite de channels par connexion SSE
-  HEARTBEAT_INTERVAL: 15.0
-  MESSAGE_TIMEOUT: 0.05
-  RECONNECT_MAX_RETRIES: 5
-  RECONNECT_BASE_DELAY: 0.5
+  url: ${URL}
+  channel: ${CHANNEL}
+  MAX_CONCURRENT_STREAMS: ${MAX_CONCURRENT_STREAMS}
+  MAX_CHANNELS_PER_STREAM: ${MAX_CHANNELS_PER_STREAM}
+  HEARTBEAT_INTERVAL: ${HEARTBEAT_INTERVAL}
+  MESSAGE_TIMEOUT: ${MESSAGE_TIMEOUT}
+  RECONNECT_MAX_RETRIES: ${RECONNECT_MAX_RETRIES}
+  RECONNECT_BASE_DELAY: ${RECONNECT_BASE_DELAY}
