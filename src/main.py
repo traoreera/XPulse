@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
@@ -54,6 +54,13 @@ _SUBSCRIBERS_SCHEMA = {
     "channel": (str, ...),
 }
 
+_EMAIL_SCHEMAS = {
+    "to": (list, []),
+    "subject": (str, ...),
+    "template": (str, ...),
+    "html_parser": (bool, True),
+}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PLUGIN PRINCIPAL
@@ -75,7 +82,7 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
             return alive, "Redis répond." if alive else "Redis ne répond pas."
 
         try:
-            self.ctx.env["channel"] = self.ctx.env["channel"].split(",")
+            # self.ctx.env["channel"] = self.ctx.env["channel"].split(",")
             self.redis_server = RedisPubSubManager(
                 RedisConfiguration.from_dict(self.ctx.env)
             )
@@ -233,7 +240,7 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
             src.addEventListener('notification', e => console.log(JSON.parse(e.data)));
         """
         redis = self._require_redis()
-        user_id: str = current_user.get("sub", "")
+        user_id: str = current_user.get("sub", None)
 
         if not user_id:
             raise HTTPException(
@@ -328,21 +335,19 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
             "errors": total_errors,
         }
 
-    @router.get("/health", tags=["xpulse"])
-    async def health(self):
-        """Vérifie que Redis est accessible."""
-        if not self.redis_server:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Redis non configuré.",
-            )
-        alive = await self.redis_server.health_check()
-        if not alive:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Redis ne répond pas.",
-            )
-        return {"status": "ok", "active_streams": self.redis_server.active_streams}
+    @router.post("/test-emit", tags=["xpulse"])
+    async def test_emit(self):
+        await self.ctx.events.emit(
+            "stock.updated",
+            {
+                "product_id": 888,
+                "name": "TEST XPULSE EMIT",
+                "quantity_before": 20,
+                "quantity_after": 3,
+                "safety_stock": 10,
+            },
+        )
+        return {"status": "event_emitted_from_xpulse"}
 
     # ── Actions IPC ───────────────────────────────────────────────────────
 
@@ -429,6 +434,31 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
         return ok(
             channel=payload.channel, active_streams=self.redis_server.active_streams
         )
+
+    @action("xpulse.email")
+    @validate_payload(_EMAIL_SCHEMAS, type_response="model", unset=False)
+    async def send_and_forget_mail(self, payload):
+        try:
+            email: _EmailService = self.get_service("ext.email")
+            response = email.queue(
+                to=payload.to,
+                subject=payload.subject,
+                is_html=payload.html_parser,
+                body=payload.template,
+            )
+
+            return (
+                ok(message="email as been send", response=response)
+                if response
+                else error(
+                    "email as not send",
+                    error="systeme as not deternine why",
+                    code="Unknow error",
+                )
+            )
+
+        except Exception:
+            return error("service mail as not found", "NoT Found")
 
     # ── Router ────────────────────────────────────────────────────────────
 

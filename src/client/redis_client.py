@@ -2,21 +2,20 @@ import asyncio
 import json
 import logging
 import re
-from typing import Optional, AsyncGenerator
+from typing import AsyncGenerator, Optional
 
 from redis.asyncio import Redis
 from redis.asyncio.connection import ConnectionPool
-from redis.exceptions import ConnectionError, TimeoutError, RedisError
+from redis.exceptions import ConnectionError, RedisError, TimeoutError
+
 from .section import RedisConfiguration
-
-
-
 
 logger = logging.getLogger("xpulse.redis")
 
 
-
-MAX_CHANNELS_PER_STREAM = 20  # valeur par défaut, remplacée à l'init de RedisPubSubManager
+MAX_CHANNELS_PER_STREAM = (
+    20  # valeur par défaut, remplacée à l'init de RedisPubSubManager
+)
 
 # Noms de channels : lettres, chiffres, tirets, underscores, points
 _CHANNEL_RE = re.compile(r"^[a-zA-Z0-9_\-\.]{1,64}$")
@@ -68,16 +67,15 @@ class RedisPubSubManager:
     - Chaque message SSE porte le champ `channel` pour que le client sache d'où vient l'event.
     """
 
-    def __init__(self, config:RedisConfiguration):
+    def __init__(self, config: RedisConfiguration):
         self.redis: Optional[Redis] = None
         self._pool: Optional[ConnectionPool] = None
         self._config = config
         self._active_streams = 0
-
-        print(config)
         global MAX_CHANNELS_PER_STREAM
 
         MAX_CHANNELS_PER_STREAM = self._config.MAX_CHANNELS_PER_STREAM
+
     # ─────────────────────────────────────────────
     # LIFECYCLE
     # ─────────────────────────────────────────────
@@ -91,7 +89,7 @@ class RedisPubSubManager:
             )
             self.redis = Redis(connection_pool=self._pool)
             await self.redis.ping()
-            logger.info("Redis connecté :(pool max=%d)",self._config.max_connection)
+            logger.info("Redis connecté :(pool max=%d)", self._config.max_connection)
         except (ConnectionError, TimeoutError) as exc:
             logger.error("Impossible de se connecter à Redis : %s", exc)
             raise
@@ -166,7 +164,9 @@ class RedisPubSubManager:
         """
         if self._active_streams >= self._config.MAX_CONCURRENT_STREAMS:
             logger.warning(
-                "Limite de streams atteinte (%d). Refus user=%s", self._config.MAX_CONCURRENT_STREAMS, user_id
+                "Limite de streams atteinte (%d). Refus user=%s",
+                self._config.MAX_CONCURRENT_STREAMS,
+                user_id,
             )
             raise StreamLimitExceeded(
                 f"Trop de connexions simultanées ({self._config.MAX_CONCURRENT_STREAMS} max)."
@@ -175,7 +175,9 @@ class RedisPubSubManager:
         self._active_streams += 1
         logger.info(
             "Stream ouvert user=%s channels=%s [actifs: %d]",
-            user_id, channels, self._active_streams,
+            user_id,
+            channels,
+            self._active_streams,
         )
 
         pubsub = self.redis.pubsub()
@@ -205,10 +207,14 @@ class RedisPubSubManager:
                     await asyncio.sleep(0)
                     continue
                 except (ConnectionError, TimeoutError) as exc:
-                    logger.warning("Redis perdu (user=%s) : %s — reconnexion…", user_id, exc)
+                    logger.warning(
+                        "Redis perdu (user=%s) : %s — reconnexion…", user_id, exc
+                    )
                     reconnected = await self._reconnect_pubsub(pubsub, channels)
                     if not reconnected:
-                        logger.error("Reconnexion impossible. Fermeture stream user=%s.", user_id)
+                        logger.error(
+                            "Reconnexion impossible. Fermeture stream user=%s.", user_id
+                        )
                         yield f"event: error\ndata: {json.dumps({'error': 'redis_unavailable'})}\n\n"
                         break
                     continue
@@ -218,7 +224,11 @@ class RedisPubSubManager:
                     try:
                         event = json.loads(msg["data"])
                     except (json.JSONDecodeError, KeyError) as exc:
-                        logger.warning("Message malformé ignoré (channel=%s) : %s", source_channel, exc)
+                        logger.warning(
+                            "Message malformé ignoré (channel=%s) : %s",
+                            source_channel,
+                            exc,
+                        )
                         continue
 
                     # Filtrage multi-tenant
@@ -245,7 +255,9 @@ class RedisPubSubManager:
             self._active_streams -= 1
             logger.info(
                 "Stream fermé user=%s channels=%s [actifs: %d]",
-                user_id, channels, self._active_streams,
+                user_id,
+                channels,
+                self._active_streams,
             )
             try:
                 await pubsub.unsubscribe(*channels)
@@ -263,10 +275,19 @@ class RedisPubSubManager:
             await asyncio.sleep(delay)
             try:
                 await pubsub.subscribe(*channels)
-                logger.info("Reconnexion réussie (channels=%s, tentative %d).", channels, attempt)
+                logger.info(
+                    "Reconnexion réussie (channels=%s, tentative %d).",
+                    channels,
+                    attempt,
+                )
                 return True
             except RedisError as exc:
-                logger.warning("Reconnexion %d/%d échouée : %s", attempt, self._config.RECONNECT_MAX_RETRIES, exc)
+                logger.warning(
+                    "Reconnexion %d/%d échouée : %s",
+                    attempt,
+                    self._config.RECONNECT_MAX_RETRIES,
+                    exc,
+                )
                 delay = min(delay * 2, 30.0)
         return False
 
