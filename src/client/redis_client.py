@@ -231,8 +231,10 @@ class RedisPubSubManager:
                         )
                         continue
 
-                    # Filtrage multi-tenant
-                    if user_id is not None and event.get(filter_key) != user_id:
+                    # Filtrage : si le message a un user_id, on ne le délivre qu'au bon user.
+                    # Si le message n'a pas de user_id (broadcast), on le délivre à tous les abonnés.
+                    event_user_id = event.get(filter_key)
+                    if user_id is not None and event_user_id is not None and event_user_id != user_id:
                         continue
 
                     # On injecte le nom du channel dans le payload

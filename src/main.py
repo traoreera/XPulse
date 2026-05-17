@@ -133,26 +133,20 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
         async def handle_publish(event: Event):
             """
             Publie sur un ou plusieurs channels pour un user précis.
-            Payload : { "channels": [...], "user_id": "...", "text": "..." }
-                  ou : { "channel": "...", "user_id": "...", "text": "..." }
+            Payload : { "channels": [...], "user_id": "...", ...données }
+                  ou : { "channel": "...", "user_id": "...", ...données }
+            Le payload complet est transmis au client SSE (user_id, event, submission_id, etc.)
             """
             if not self.redis_server:
-                logger.warning(
-                    "ext.notification.publish ignoré : Redis non disponible."
-                )
+                logger.warning("ext.notification.publish ignoré : Redis non disponible.")
                 return [error("redis_unavailable")]
 
             data: dict = dict(event.data)
-            raw_channels = data.pop("channels", None) or [
-                data.pop("channel", "notification")
-            ]
+            raw_channels = data.pop("channels", None) or [data.pop("channel", "notification")]
             user_id = data.get("user_id")
-            text = data.get("text", "")
 
-            if not user_id or not text:
-                logger.warning(
-                    "ext.notification.publish : user_id et text sont requis."
-                )
+            if not user_id:
+                logger.warning("ext.notification.publish : user_id requis.")
                 return [error("missing_fields")]
 
             try:
@@ -160,38 +154,34 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
                     raw_channels if isinstance(raw_channels, list) else [raw_channels]
                 )
             except InvalidChannel as exc:
-                logger.warning(
-                    "ext.notification.publish : channels invalides : %s", exc
-                )
+                logger.warning("ext.notification.publish : channels invalides : %s", exc)
                 return [error(str(exc))]
 
-            results = await self.redis_server.publish_many(
-                channels, {"user_id": user_id, "text": text}
-            )
+            # Publie le payload complet (user_id + toutes les données événementielles)
+            results = await self.redis_server.publish_many(channels, data)
             ok_channels = [ch for ch, s in results.items() if s]
             fail_channels = [ch for ch, s in results.items() if not s]
             if fail_channels:
-                logger.warning(
-                    "ext.notification.publish : channels en échec : %s", fail_channels
-                )
+                logger.warning("ext.notification.publish : channels en échec : %s", fail_channels)
             return [ok(channels=ok_channels, failed=fail_channels)]
 
         @self.event.on("ext.notification.broadcast")
         async def handle_broadcast(event: Event):
             """
-            Broadcast vers tous les users actifs.
-            Payload : { "channels": [...], "text": "..." }
+            Broadcast vers tous les subscribers actifs.
+            Payload : { "channels": [...], "text": "...", ...données }
+            Le payload complet (sans user_id) est publié — le stream SSE le délivre
+            à tous les abonnés du channel (messages sans user_id = broadcast).
             """
             if not self.redis_server:
                 return [error("redis_unavailable")]
 
-            data: dict = event.data
-            raw_channels = data.get("channels", ["notification"])
-            text = data.get("text", "")
+            data: dict = dict(event.data)
+            raw_channels = data.pop("channels", ["notification"])
 
-            if not text:
-                logger.warning("ext.notification.broadcast : text requis.")
-                return [error("missing_text")]
+            if not data:
+                logger.warning("ext.notification.broadcast : payload vide.")
+                return [error("missing_payload")]
 
             try:
                 channels = validate_channels(
@@ -201,21 +191,13 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
                 logger.warning("broadcast : channels invalides : %s", exc)
                 return [error(str(exc))]
 
-            try:
-                response = await self.event.emit("auth.get.user.ids", {})
-                user_ids = list(response[0]) if response and response[0] else []
-            except Exception as exc:
-                logger.error(
-                    "broadcast : impossible de récupérer les user IDs : %s", exc
-                )
-                return [error("cannot_fetch_users")]
-
-            for uid in user_ids:
-                await self.redis_server.publish_many(
-                    channels, {"user_id": uid, "text": text}
-                )
-
-            return [ok(sent=len(user_ids), channels=channels)]
+            # Publie sans user_id → le stream SSE délivre à tous les abonnés
+            results = await self.redis_server.publish_many(channels, data)
+            ok_channels = [ch for ch, s in results.items() if s]
+            fail_channels = [ch for ch, s in results.items() if not s]
+            if fail_channels:
+                logger.warning("ext.notification.broadcast : channels en échec : %s", fail_channels)
+            return [ok(channels=ok_channels, failed=fail_channels)]
 
     # ── Routes HTTP ───────────────────────────────────────────────────────
 
@@ -296,44 +278,20 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
         channels: list[str] = Query(default=["notification"]),
         _: AuthPayload = Depends(require_permission("xpulse:broadcast")),
     ):
-        """Envoie un message à tous les utilisateurs sur un ou plusieurs channels."""
+        """Envoie un message à tous les abonnés sur un ou plusieurs channels.
+        Publie sans user_id — le filtre SSE le délivre à tous les abonnés."""
         redis = self._require_redis()
         parsed_channels = self._parse_channels(channels)
 
-        try:
-            response = await self.event.emit("auth.get.user.ids", {})
-            user_ids = list(response[0]) if response and response[0] else []
-        except Exception as exc:
-            logger.error(
-                "broadcast HTTP : impossible de récupérer les user IDs : %s", exc
-            )
+        results = await redis.publish_many(parsed_channels, {"text": text})
+        failed = [ch for ch, s in results.items() if not s]
+        if failed:
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Erreur lors de la récupération des utilisateurs.",
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Broadcast échoué sur : {failed}",
             )
-
-        if not user_ids:
-            return {"status": "ok", "sent": 0, "channels": parsed_channels}
-
-        total_errors = 0
-        for uid in user_ids:
-            results = await redis.publish_many(
-                parsed_channels, {"user_id": uid, "text": text}
-            )
-            total_errors += sum(1 for s in results.values() if not s)
-
-        logger.info(
-            "Broadcast : %d users × %d channels, %d erreurs.",
-            len(user_ids),
-            len(parsed_channels),
-            total_errors,
-        )
-        return {
-            "status": "ok",
-            "sent": len(user_ids),
-            "channels": parsed_channels,
-            "errors": total_errors,
-        }
+        logger.info("Broadcast : channels=%s", parsed_channels)
+        return {"status": "ok", "channels": parsed_channels}
 
     @router.post("/test-emit", tags=["xpulse"])
     async def test_emit(self):
@@ -376,8 +334,9 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
     @validate_payload(_BROADCAST_SCHEMA, type_response="model", unset=False)
     async def ipc_broadcast(self, payload) -> dict:
         """
-        Broadcast un message à tous les users actifs.
+        Broadcast un message à tous les abonnés des channels.
         Payload : { "text": "...", "channels": [...] }
+        Publie sans user_id → délivré à tous les abonnés (filtre SSE ignoré).
         """
         if not self.redis_server:
             return error("redis_unavailable")
@@ -387,19 +346,9 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
         except InvalidChannel as exc:
             return error(str(exc), code="invalid_channel")
 
-        try:
-            response = await self.event.emit("auth.get.user.ids", {})
-            user_ids = list(response[0]) if response and response[0] else []
-        except Exception as exc:
-            logger.error("xpulse.broadcast : user IDs introuvables : %s", exc)
-            return error("cannot_fetch_users")
-
-        for uid in user_ids:
-            await self.redis_server.publish_many(
-                channels, {"user_id": uid, "text": payload.text}
-            )
-
-        return ok(sent=len(user_ids), channels=channels)
+        results = await self.redis_server.publish_many(channels, {"text": payload.text})
+        failed = [ch for ch, s in results.items() if not s]
+        return ok(channels=[ch for ch in channels if ch not in failed], failed=failed)
 
     @action("xpulse.stream")
     @validate_payload(_STREAM_SCHEMA, type_response="model", unset=False)
@@ -439,7 +388,7 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
     @validate_payload(_EMAIL_SCHEMAS, type_response="model", unset=False)
     async def send_and_forget_mail(self, payload):
         try:
-            email: _EmailService = self.get_service("ext.email")
+            email = self.get_service("ext.email")
             response = email.queue(
                 to=payload.to,
                 subject=payload.subject,
