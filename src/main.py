@@ -223,11 +223,13 @@ class Plugin(AutoDispatchMixin, RoutedPlugin, TrustedBase):
         """
         redis = self._require_redis()
         user_id: str = current_user.get("sub", None)
-
+        
+        
         if not user_id:
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED, detail="Token invalide."
+                status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Token invalide.{current_user}"
             )
+            
 
         parsed_channels = self._parse_channels(channels)
 
